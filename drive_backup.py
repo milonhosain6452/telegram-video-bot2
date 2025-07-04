@@ -2,24 +2,27 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 import os
 
-gauth = GoogleAuth()
-gauth.LoadCredentialsFile("mycreds.txt")
+def backup_database():
+    if not os.path.exists("database.db"):
+        print("❌ database.db not found!")
+        return
 
-if gauth.credentials is None:
-    gauth.LocalWebserverAuth()
-elif gauth.access_token_expired:
-    gauth.Refresh()
-else:
-    gauth.Authorize()
+    gauth = GoogleAuth()
+    gauth.LoadCredentialsFile("mycreds.txt")
 
-gauth.SaveCredentialsFile("mycreds.txt")
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
 
-drive = GoogleDrive(gauth)
+    gauth.SaveCredentialsFile("mycreds.txt")
 
-if os.path.exists("database.db"):
-    file = drive.CreateFile({'title': 'database.db'})
-    file.SetContentFile("database.db")
-    file.Upload()
+    drive = GoogleDrive(gauth)
+
+    file1 = drive.CreateFile({'title': 'database.db'})
+    file1.SetContentFile("database.db")
+    file1.Upload()
+
     print("✅ database.db uploaded to Google Drive!")
-else:
-    print("❌ database.db not found!")

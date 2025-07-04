@@ -1,98 +1,110 @@
-import os
-import sqlite3
-import string
-import random
-import asyncio
-from datetime import datetime, timedelta
-
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.enums import ParseMode
 from drive_backup import backup_database
+import sqlite3
+import time
+import re
+import os
+import threading
+from flask_app import app
 
-# BOT CONFIG
 API_ID = 18088290
 API_HASH = "1b06cbb45d19188307f10bcf275341c5"
 BOT_TOKEN = "8154600064:AAGXBf6Rlk8aIqQohHSC8yxCrqgGnkouXKk"
 CHANNEL_ID = -1002899840201
-OWNER_ID = 6362194288  # তোমার ইউজার আইডি
+ADMIN_ID = 6362194288
 
 bot = Client("video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# database
-conn = sqlite3.connect("database.db")
-c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS links (id INTEGER PRIMARY KEY AUTOINCREMENT, msg_id INTEGER, unique_id TEXT)")
-conn.commit()
-
-
-def generate_id(length=8):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
-
-
-@bot.on_message(filters.command("genlink") & filters.private)
-async def genlink(client, message: Message):
-    if not message.from_user:
-        return
-    if len(message.command) < 2:
-        await message.reply("❌ Please send a valid video link like:\n`/genlink https://t.me/c/2899840201/28`")
-        return
-
-    try:
-        link = message.command[1]
-        if "/c/" not in link:
-            return await message.reply("❌ Invalid link format.")
-
-        msg_id = int(link.split("/")[-1])
-        unique_id = f"video{msg_id}"
-        c.execute("INSERT INTO links (msg_id, unique_id) VALUES (?, ?)", (msg_id, unique_id))
-        conn.commit()
-        share_link = f"https://t.me/{bot.me.username}?start={unique_id}"
-        await message.reply(f"✅ Your private video link:\n{share_link}")
-
-        backup_database()  # auto backup after link gen
-
-    except Exception as e:
-        await message.reply(f"❌ Error: {e}")
-
+# Ensure database exists
+if not os.path.exists("database.db"):
+    conn = sqlite3.connect("database.db")
+    conn.execute('''CREATE TABLE IF NOT EXISTS videos
+                 (msg_id INTEGER PRIMARY KEY,
+                 unique_code TEXT NOT NULL);''')
+    conn.commit()
+    conn.close()
 
 @bot.on_message(filters.command("start"))
 async def start(client, message: Message):
-    if not message.from_user:
+    if len(message.command) > 1 and message.command[1].startswith("video"):
+        code = message.command[1].replace("video", "")
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT msg_id FROM videos WHERE unique_code=?", (code,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            try:
+                sent = await bot.copy_message(
+                    chat_id=message.chat.id,
+                    from_chat_id=CHANNEL_ID,
+                    message_id=result[0]
+                )
+                await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে", quote=True)
+                time.sleep(2)
+
+                # Schedule deletion after 30 minutes
+                threading.Timer(1800, lambda: bot.delete_messages(message.chat.id, sent.id)).start()
+            except Exception as e:
+                await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
+        else:
+            await message.reply("❌ ভিডিও লিংক পাওয়া যায়নি।")
+    else:
+        await message.reply(
+            "👋 Send me a channel video link or use /genlink to generate a sharable link."
+        )
+
+@bot.on_message(filters.command("genlink"))
+async def genlink(client, message: Message):
+    if not message.reply_to_message and len(message.command) < 2:
+        await message.reply("⚠️ একটি চ্যানেলের ভিডিও/পোস্টের লিংক দাও।\n\nযেমন: `/genlink https://t.me/c/2899840201/28`", quote=True)
         return
 
-    args = message.text.split(" ", 1)
-    if len(args) == 2 and args[1].startswith("video"):
-        try:
-            msg_id = int(args[1][5:])
-            c.execute("SELECT msg_id FROM links WHERE unique_id = ?", (args[1],))
-            row = c.fetchone()
-            if not row:
-                return await message.reply("❌ Video not found or expired.")
+    link = message.text.split(" ", 1)[1] if len(message.command) > 1 else ""
+    match = re.search(r"/c/\d+/(\\d+)", link) or re.search(r"/c/(\d+)/(\d+)", link)
 
-            sent = await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=CHANNEL_ID,
-                message_id=msg_id,
-                caption="⏳ This video/post will be deleted after 30 minutes."
-            )
+    if match:
+        msg_id = int(match.group(2))
+        unique_code = f"{msg_id}"
 
-            await asyncio.sleep(1800)
-            await sent.delete()
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO videos (msg_id, unique_code) VALUES (?, ?)", (msg_id, unique_code))
+        conn.commit()
+        conn.close()
 
-        except Exception as e:
-            await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
-    else:
-        await message.reply("👋 Send me a private channel video link or use /genlink <link>.")
+        share_link = f"https://t.me/{bot.me.username}?start=video{unique_code}"
+        await message.reply(f"✅ Your private video link:\n{share_link}", quote=True)
 
-
-@bot.on_message(filters.command("backup") & filters.user(OWNER_ID))
-async def manual_backup(client, message: Message):
-    try:
+        # Optional auto-backup
         backup_database()
-        await message.reply("✅ Manual backup done and uploaded to Google Drive!")
+
+    else:
+        await message.reply("❌ ভুল লিংক ফরম্যাট। লিংকটি এমন হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
+
+@bot.on_message(filters.command("checkbackup"))
+async def check_backup(client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("⛔️ Only admin can use this command.")
+
+    try:
+        if os.path.exists("backup_log.txt"):
+            with open("backup_log.txt", "r") as log:
+                last_lines = log.readlines()[-5:]
+                await message.reply("📦 Last backup logs:\n\n" + "".join(last_lines))
+        else:
+            await message.reply("❌ No backup log found.")
     except Exception as e:
-        await message.reply(f"❌ Backup failed: {e}")
+        await message.reply(f"❌ Error reading log:\n{e}")
 
+# ✅ Flask Keep-Alive (Render & UptimeRobot support)
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
 
-print("✅ Bot is running...")
+threading.Thread(target=run_flask).start()
+
+# 🔃 Run the bot
 bot.run()

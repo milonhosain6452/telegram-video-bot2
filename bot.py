@@ -2,135 +2,97 @@ import os
 import sqlite3
 import string
 import random
-import threading
-import time
-from flask import Flask, request
-from pyrogram import Client, filters
-from drive_backup import backup_database  # Google Drive Auto Backup
+import asyncio
+from datetime import datetime, timedelta
 
-# ------------------ BOT CREDENTIALS ------------------ #
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from drive_backup import backup_database
+
+# BOT CONFIG
 API_ID = 18088290
 API_HASH = "1b06cbb45d19188307f10bcf275341c5"
-BOT_TOKEN = "7628770960:AAHKgUwOAtrolkpN4hU58ISbsZDWyIP6324"
+BOT_TOKEN = "8154600064:AAGXBf6Rlk8aIqQohHSC8yxCrqgGnkouXKk"
 CHANNEL_ID = -1002899840201
-BOT_USERNAME = "video12321_bot"
-OWNER_ID = 6362194288  # Only you can use /checkbackup
+OWNER_ID = 6362194288  # তোমার ইউজার আইডি
 
-# ------------------ INIT ------------------ #
-bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-app = Flask(__name__)
+bot = Client("video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ------------------ DB SETUP ------------------ #
-def init_db():
-    conn = sqlite3.connect("database.db")
-    conn.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-    conn.execute("CREATE TABLE IF NOT EXISTS links (code TEXT, message_id INTEGER, user_id INTEGER)")
-    conn.commit()
-    conn.close()
+# database
+conn = sqlite3.connect("database.db")
+c = conn.cursor()
+c.execute("CREATE TABLE IF NOT EXISTS links (id INTEGER PRIMARY KEY AUTOINCREMENT, msg_id INTEGER, unique_id TEXT)")
+conn.commit()
 
-init_db()
 
-# ------------------ HELPERS ------------------ #
-def generate_code(length=8):
+def generate_id(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-def auto_delete(chat_id, msg_id):
-    time.sleep(1800)  # 30 minutes
-    try:
-        bot.delete_messages(chat_id, msg_id)
-    except Exception as e:
-        print(f"[Delete Error] {e}")
-
-# ------------------ BOT HANDLERS ------------------ #
-@bot.on_message(filters.command("start") & filters.private)
-def start_command(client, message):
-    user_id = message.from_user.id
-    with sqlite3.connect("database.db") as db:
-        db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-
-    # Check for /start payload
-    if len(message.command) > 1 and message.command[1].startswith("video"):
-        try:
-            msg_id = int(message.command[1].replace("video", ""))
-            sent = client.copy_message(chat_id=user_id, from_chat_id=CHANNEL_ID, message_id=msg_id)
-            client.send_message(chat_id=user_id, text="🕐 এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে।")
-            threading.Thread(target=auto_delete, args=(user_id, sent.id)).start()
-        except Exception as e:
-            message.reply_text("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
-            print(f"[Video Error] {e}")
-        return
-
-    message.reply_text("👋 Send me a private channel video link or use /genlink to generate a sharable link.")
 
 @bot.on_message(filters.command("genlink") & filters.private)
-def genlink_command(client, message):
-    user_id = message.from_user.id
+async def genlink(client, message: Message):
+    if not message.from_user:
+        return
     if len(message.command) < 2:
-        return message.reply_text("❗ Send like this:\n/genlink <channel post link>")
+        await message.reply("❌ Please send a valid video link like:\n`/genlink https://t.me/c/2899840201/28`")
+        return
 
-    link = message.command[1]
     try:
+        link = message.command[1]
+        if "/c/" not in link:
+            return await message.reply("❌ Invalid link format.")
+
         msg_id = int(link.split("/")[-1])
-        code = f"video{msg_id}"
-        with sqlite3.connect("database.db") as db:
-            db.execute("INSERT INTO links (code, message_id, user_id) VALUES (?, ?, ?)", (code, msg_id, user_id))
+        unique_id = f"video{msg_id}"
+        c.execute("INSERT INTO links (msg_id, unique_id) VALUES (?, ?)", (msg_id, unique_id))
+        conn.commit()
+        share_link = f"https://t.me/{bot.me.username}?start={unique_id}"
+        await message.reply(f"✅ Your private video link:\n{share_link}")
 
-        share_link = f"https://t.me/{BOT_USERNAME}?start={code}"
-        message.reply_text(f"✅ Your private video link:\n{share_link}")
-
-        # Auto backup
-        backup_database()
+        backup_database()  # auto backup after link gen
 
     except Exception as e:
-        message.reply_text("❌ Invalid link or error occurred.")
-        print(f"[Genlink Error] {e}")
+        await message.reply(f"❌ Error: {e}")
 
-# ------------------ BACKUP LOG CHECKER ------------------ #
-@bot.on_message(filters.command("checkbackup") & filters.private)
-def check_backup_status(client, message):
-    if message.from_user.id != OWNER_ID:
-        return message.reply_text("❌ এই কমান্ড শুধুমাত্র বট মালিক ব্যবহার করতে পারবে।")
 
-    try:
-        with open("backup_log.txt", "r") as log_file:
-            lines = log_file.readlines()
-            if not lines:
-                return message.reply_text("❗ কোনো ব্যাকআপ লগ পাওয়া যায়নি।")
-            last_line = lines[-1].strip()
-            message.reply_text(f"📝 সর্বশেষ ব্যাকআপ স্ট্যাটাস:\n\n{last_line}")
-    except FileNotFoundError:
-        message.reply_text("❌ এখনো কোনো ব্যাকআপ লগ ফাইল তৈরি হয়নি।")
-    except Exception as e:
-        message.reply_text(f"⚠️ কিছু একটা ভুল হয়েছে:\n{e}")
+@bot.on_message(filters.command("start"))
+async def start(client, message: Message):
+    if not message.from_user:
+        return
 
-# ------------------ FLASK WEB ------------------ #
-@app.route("/")
-def home():
-    return "✅ Bot is Live."
-
-@app.route("/<code>")
-def handle_link(code):
-    with sqlite3.connect("database.db") as db:
-        result = db.execute("SELECT message_id, user_id FROM links WHERE code = ?", (code,)).fetchone()
-    if result:
-        msg_id, user_id = result
+    args = message.text.split(" ", 1)
+    if len(args) == 2 and args[1].startswith("video"):
         try:
-            sent = bot.copy_message(chat_id=user_id, from_chat_id=CHANNEL_ID, message_id=msg_id)
-            bot.send_message(chat_id=user_id, text="🕐 এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে।")
-            threading.Thread(target=auto_delete, args=(user_id, sent.id)).start()
-            return "📤 Video sent to your Telegram!"
+            msg_id = int(args[1][5:])
+            c.execute("SELECT msg_id FROM links WHERE unique_id = ?", (args[1],))
+            row = c.fetchone()
+            if not row:
+                return await message.reply("❌ Video not found or expired.")
+
+            sent = await client.copy_message(
+                chat_id=message.chat.id,
+                from_chat_id=CHANNEL_ID,
+                message_id=msg_id,
+                caption="⏳ This video/post will be deleted after 30 minutes."
+            )
+
+            await asyncio.sleep(1800)
+            await sent.delete()
+
         except Exception as e:
-            return f"❌ Error: {str(e)}"
+            await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
     else:
-        return "❌ Invalid or expired link."
+        await message.reply("👋 Send me a private channel video link or use /genlink <link>.")
 
-# ------------------ STARTUP ------------------ #
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
 
-def run_bot():
-    bot.run()
+@bot.on_message(filters.command("backup") & filters.user(OWNER_ID))
+async def manual_backup(client, message: Message):
+    try:
+        backup_database()
+        await message.reply("✅ Manual backup done and uploaded to Google Drive!")
+    except Exception as e:
+        await message.reply(f"❌ Backup failed: {e}")
 
-if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    run_bot()
+
+print("✅ Bot is running...")
+bot.run()

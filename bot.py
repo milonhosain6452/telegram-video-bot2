@@ -7,15 +7,15 @@ import time
 import re
 import os
 import threading
+import requests
 from flask_app import app
-import requests  # <-- for short link API
 
 API_ID = 18088290
 API_HASH = "1b06cbb45d19188307f10bcf275341c5"
 BOT_TOKEN = "8154600064:AAGXBf6Rlk8aIqQohHSC8yxCrqgGnkouXKk"
 CHANNEL_ID = -1002899840201
 ADMIN_ID = 6362194288
-SHORTZON_API_KEY = "sk_OPDm4uxKer8jMI7n"  # <-- তোমার দেওয়া ShortZon API Key
+SHORTZON_API_KEY = "pk_h65z4Oskrm24q4Om"
 
 bot = Client("video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -47,13 +47,17 @@ async def start(client, message: Message):
                 )
                 await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে", quote=True)
                 time.sleep(2)
+
+                # Schedule deletion after 30 minutes
                 threading.Timer(1800, lambda: bot.delete_messages(message.chat.id, sent.id)).start()
-            except Exception:
+            except Exception as e:
                 await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
         else:
             await message.reply("❌ ভিডিও লিংক পাওয়া যায়নি।")
     else:
-        await message.reply("👋 Send me a channel video link or use /genlink to generate a sharable link.")
+        await message.reply(
+            "👋 Send me a channel video link or use /genlink to generate a sharable link."
+        )
 
 @bot.on_message(filters.command("genlink"))
 async def genlink(client, message: Message):
@@ -62,10 +66,10 @@ async def genlink(client, message: Message):
         return
 
     link = message.text.split(" ", 1)[1] if len(message.command) > 1 else ""
-    match = re.search(r"/c/\d+/(\\d+)", link) or re.search(r"/c/(\d+)/(\d+)", link)
+    match = re.search(r"/c/\d+/(\d+)", link)
 
     if match:
-        msg_id = int(match.group(2))
+        msg_id = int(match.group(1))
         unique_code = f"{msg_id}"
 
         conn = sqlite3.connect("database.db")
@@ -76,9 +80,12 @@ async def genlink(client, message: Message):
 
         share_link = f"https://t.me/{bot.me.username}?start=video{unique_code}"
         await message.reply(f"✅ Your private video link:\n{share_link}", quote=True)
+
+        # Optional auto-backup
         backup_database()
+
     else:
-        await message.reply("❌ ভুল লিংক ফরম্যাট। লিংকটি এমন হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
+        await message.reply("❌ ভুল লিংক ফরম্যাট। লিংকটি এমন হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
 
 @bot.on_message(filters.command("checkbackup"))
 async def check_backup(client, message: Message):
@@ -95,27 +102,39 @@ async def check_backup(client, message: Message):
     except Exception as e:
         await message.reply(f"❌ Error reading log:\n{e}")
 
-# ✅ নতুন ফিচার: /short <link> → ShortZon শর্টলিংক
 @bot.on_message(filters.command("short"))
 async def short_link(client, message: Message):
     if len(message.command) < 2:
-        return await message.reply("⚠️ দয়া করে একটি লিংক দিন। যেমন:\n/short https://example.com")
+        await message.reply("⚠️ Please provide a URL to shorten.\n\nUsage: `/short <url>`", quote=True)
+        return
 
-    original_url = message.command[1]
+    original_url = message.text.split(" ", 1)[1]
+
     try:
-        response = requests.post("https://api.shortzon.com/api/v1/shorten", json={
-            "api_key": SHORTZON_API_KEY,
-            "url": original_url
-        })
+        response = requests.post(
+            "https://api.shortzon.com/api/v1/shorten",
+            json={
+                "api_key": SHORTZON_API_KEY,
+                "url": original_url
+            },
+            verify=False  # SSL error workaround
+        )
         data = response.json()
-        if data.get("shortenedUrl"):
-            await message.reply(f"🔗 Short Link:\n{data['shortenedUrl']}")
-        else:
-            await message.reply("❌ লিংক শর্ট করতে সমস্যা হয়েছে।")
-    except Exception as e:
-        await message.reply(f"❌ API তে সমস্যা হচ্ছে:\n{e}")
 
-# ✅ Flask Keep-Alive
+        if response.status_code == 200 and data.get("status") == "success":
+            short_url = data.get("shortenedUrl") or data.get("shortUrl") or data.get("short_link")
+            if short_url:
+                await message.reply(f"✅ Shortened URL:\n{short_url}", quote=True)
+            else:
+                await message.reply("❌ API থেকে সঠিক লিংক পাওয়া যায়নি।", quote=True)
+        else:
+            error_msg = data.get("message") or "Unknown API error"
+            await message.reply(f"❌ API তে সমস্যা হচ্ছে: {error_msg}", quote=True)
+
+    except Exception as e:
+        await message.reply(f"❌ API তে সমস্যা হচ্ছে: {str(e)}", quote=True)
+
+# ✅ Flask Keep-Alive (Render & UptimeRobot support)
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
 

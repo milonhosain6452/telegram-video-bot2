@@ -1,7 +1,7 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
-from drive_backup import backup_database
+from drive_backup import backup_database, restore_database
 import sqlite3
 import time
 import re
@@ -17,7 +17,7 @@ ADMIN_ID = 6362194288
 
 bot = Client("video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Database check
+# Ensure database exists
 if not os.path.exists("database.db"):
     conn = sqlite3.connect("database.db")
     conn.execute('''CREATE TABLE IF NOT EXISTS videos
@@ -43,31 +43,23 @@ async def start(client, message: Message):
                     from_chat_id=CHANNEL_ID,
                     message_id=result[0]
                 )
-                await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে\n⚠️ This video/post will be deleted after 30 minutes", quote=True)
-                time.sleep(2)
+                await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে\n\n⚠️ This video/post will be deleted after 30 minutes.", quote=True)
+
                 threading.Timer(1800, lambda: bot.delete_messages(message.chat.id, sent.id)).start()
-            except Exception as e:
+            except Exception:
                 await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
         else:
             await message.reply("❌ ভিডিও লিংক পাওয়া যায়নি।")
-
     else:
-        if message.from_user.id == ADMIN_ID:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📽 Generate Link", switch_inline_query_current_chat="/genlink")],
-                [InlineKeyboardButton("✅ Check Backup", callback_data="check_backup")],
-                [InlineKeyboardButton("♻️ Restore DB", callback_data="restore_db")],
-                [InlineKeyboardButton("🔗 Shorten Link", switch_inline_query_current_chat="/short")],
-                [InlineKeyboardButton("▶️ Start Help", callback_data="start_help")]
-            ])
-            await message.reply("👋 Welcome Admin! Use the buttons below:", reply_markup=keyboard)
-        else:
-            await message.reply("👋 Send me a channel video link or use /genlink to generate a sharable link.")
+        await message.reply("👋 Send me a video link or click a shared link to get the video.")
 
 @bot.on_message(filters.command("genlink"))
 async def genlink(client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("⛔️ You are not authorized to generate links.")
+
     if not message.reply_to_message and len(message.command) < 2:
-        await message.reply("⚠️ একটি চ্যানেলের ভিডিও/পোস্টের লিংক দাও।\nযেমন: `/genlink https://t.me/c/2899840201/28`", quote=True)
+        await message.reply("⚠️ একটি চ্যানেলের ভিডিও/পোস্টের লিংক দাও।\n\nযেমন: `/genlink https://t.me/c/2899840201/28`", quote=True)
         return
 
     link = message.text.split(" ", 1)[1] if len(message.command) > 1 else ""
@@ -88,12 +80,13 @@ async def genlink(client, message: Message):
 
         backup_database()
     else:
-        await message.reply("❌ ভুল লিংক ফরম্যাট। লিংকটি এমন হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
+        await message.reply("❌ ভুল লিংক ফরম্যাট।\nলিংকটি হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
 
 @bot.on_message(filters.command("checkbackup"))
 async def check_backup(client, message: Message):
     if message.from_user.id != ADMIN_ID:
         return await message.reply("⛔️ Only admin can use this command.")
+
     try:
         if os.path.exists("backup_log.txt"):
             with open("backup_log.txt", "r") as log:
@@ -108,48 +101,47 @@ async def check_backup(client, message: Message):
 async def restore_db(client, message: Message):
     if message.from_user.id != ADMIN_ID:
         return await message.reply("⛔️ Only admin can use this command.")
-
     try:
-        from drive_backup import restore_database
         restore_database()
-        await message.reply("✅ Database restored from Google Drive!")
+        await message.reply("✅ Restore successful.")
     except Exception as e:
         await message.reply(f"❌ Restore failed:\n{e}")
 
-@bot.on_message(filters.command("short"))
-async def shorten_link(client, message: Message):
-    if not message.text or len(message.text.split()) < 2:
-        return await message.reply("⚠️ Provide a link to shorten.\nUsage: `/short https://example.com`")
-    try:
-        import requests
-        url = message.text.split(" ", 1)[1]
-        api_token = "87dfd72cea81178fac6d85638785781be0860817"
-        res = requests.get(f"https://shrinkearn.com/api?api={api_token}&url={url}")
-        data = res.json()
-        if "shortenedUrl" in data:
-            await message.reply(f"🔗 Short Link:\n{data['shortenedUrl']}")
-        else:
-            await message.reply(f"❌ Error:\n{data}")
-    except Exception as e:
-        await message.reply(f"❌ API Error:\n{e}")
+@bot.on_message(filters.command("admin"))
+async def admin_panel(client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Check Backup", callback_data="check_backup")],
+        [InlineKeyboardButton("🔁 Restore Backup", callback_data="restore_backup")]
+    ])
+    await message.reply("🛠 Admin Panel:", reply_markup=keyboard)
 
-# Callback button handler
 @bot.on_callback_query()
 async def handle_callback(client, callback_query):
-    user_id = callback_query.from_user.id
-    if user_id != ADMIN_ID:
-        return await callback_query.answer("⛔️ Only admin can use this.")
+    if callback_query.from_user.id != ADMIN_ID:
+        return await callback_query.answer("Unauthorized", show_alert=True)
 
     if callback_query.data == "check_backup":
-        await check_backup(client, callback_query.message)
-    elif callback_query.data == "restore_db":
-        await restore_db(client, callback_query.message)
-    elif callback_query.data == "start_help":
-        await callback_query.message.reply("ℹ️ Use /genlink to generate video links, /short to shorten links, /checkbackup to check logs, and /restoredb to recover DB.")
+        if os.path.exists("backup_log.txt"):
+            with open("backup_log.txt", "r") as log:
+                last_lines = log.readlines()[-5:]
+                await callback_query.message.reply("📦 Last backup logs:\n\n" + "".join(last_lines))
+        else:
+            await callback_query.message.reply("❌ No backup log found.")
+    elif callback_query.data == "restore_backup":
+        try:
+            restore_database()
+            await callback_query.message.reply("✅ Restore successful.")
+        except Exception as e:
+            await callback_query.message.reply(f"❌ Restore failed:\n{e}")
+    await callback_query.answer()
 
-# Flask keep alive
+# Flask keep-alive for Render
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
 
 threading.Thread(target=run_flask).start()
+
+# Start bot
 bot.run()

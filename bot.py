@@ -12,10 +12,10 @@ from flask_app import app
 
 API_ID = 18088290
 API_HASH = "1b06cbb45d19188307f10bcf275341c5"
-BOT_TOKEN = "8154600064:AAGbTUnRLj0A0ZzDyM5AUNPT3rGw8FwZ-M8"
+BOT_TOKEN = "8154600064:AAGIreAz9oG_3Ypbrga3VLFSITbx4qvKM6A"
 CHANNEL_ID = -1002899840201
 ADMIN_ID = 6362194288
-SHORT_API = "87dfd72cea81178fac6d85638785781be0860817"
+SHORT_API = "87dfd72cea81178fac6d85638785781be0860817"  # ShrinkEarn API
 
 bot = Client("video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -45,23 +45,22 @@ async def start(client, message: Message):
                     from_chat_id=CHANNEL_ID,
                     message_id=result[0]
                 )
-                await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে", quote=True)
+                await message.reply_text("⚠️ এই ভিডিও / পোস্ট ৩০ মিনিট পর ডিলিট হয়ে যাবে\n⚠️ This video/post will be deleted after 30 minutes", quote=True)
                 threading.Timer(1800, lambda: bot.delete_messages(message.chat.id, sent.id)).start()
-            except Exception as e:
+            except Exception:
                 await message.reply("❌ ভিডিও আনতে সমস্যা হচ্ছে।")
         else:
             await message.reply("❌ ভিডিও লিংক পাওয়া যায়নি।")
     else:
         if message.from_user.id == ADMIN_ID:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📦 Check Backup", callback_data="checkbackup")],
-                [InlineKeyboardButton("♻️ Restore Database", callback_data="restoredb")]
-            ])
-            await message.reply("👋 Admin Panel:", reply_markup=keyboard)
-        else:
             await message.reply(
-                "👋 Send me a channel video link or use /genlink to generate a sharable link."
+                "👋 Welcome, Admin!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📦 Check Backup Logs", callback_data="checkbackup")]
+                ])
             )
+        else:
+            await message.reply("👋 Send me a channel video link or use /genlink to generate a sharable link.")
 
 @bot.on_message(filters.command("genlink"))
 async def genlink(client, message: Message):
@@ -70,7 +69,7 @@ async def genlink(client, message: Message):
         return
 
     link = message.text.split(" ", 1)[1] if len(message.command) > 1 else ""
-    match = re.search(r"/c/\d+/(\\d+)", link) or re.search(r"/c/(\d+)/(\d+)", link)
+    match = re.search(r"/c/(\d+)/(\d+)", link)
 
     if match:
         msg_id = int(match.group(2))
@@ -85,51 +84,50 @@ async def genlink(client, message: Message):
         share_link = f"https://t.me/{bot.me.username}?start=video{unique_code}"
         await message.reply(f"✅ Your private video link:\n{share_link}", quote=True)
 
-        # Optional auto-backup
+        # Auto-backup
         backup_database()
-
     else:
         await message.reply("❌ ভুল লিংক ফরম্যাট। লিংকটি এমন হওয়া উচিত:\n`https://t.me/c/<channel_id>/<message_id>`", quote=True)
 
 @bot.on_message(filters.command("short"))
 async def short_link(client, message: Message):
     if len(message.command) < 2:
-        return await message.reply("🔗 একটা লিংক দাও শর্ট করার জন্য।\nযেমন: `/short https://yourlink.com`")
+        await message.reply("🔗 একটি লিংক দিন শর্ট করতে:\nযেমন: `/short https://example.com`")
+        return
 
-    original_link = message.text.split(" ", 1)[1]
-    api_url = f"https://shrinkearn.com/api?api={SHORT_API}&url={original_link}"
-
+    long_url = message.text.split(" ", 1)[1]
     try:
-        res = requests.get(api_url).json()
-        if "shortenedUrl" in res:
-            await message.reply(f"✅ Shortened Link:\n{res['shortenedUrl']}")
+        res = requests.get("https://shrinkearn.com/api", params={
+            "api": SHORT_API,
+            "url": long_url,
+            "format": "text"
+        })
+        if res.status_code == 200:
+            await message.reply(f"🔗 Shortened Link:\n{res.text}")
         else:
-            await message.reply(f"❌ API তে সমস্যা হচ্ছে:\n{res}")
+            await message.reply("❌ লিংক শর্ট করতে সমস্যা হয়েছে।")
     except Exception as e:
         await message.reply(f"❌ API তে সমস্যা হচ্ছে:\n{e}")
 
-@bot.on_callback_query()
-async def handle_buttons(client, callback_query):
-    user_id = callback_query.from_user.id
-    if user_id != ADMIN_ID:
-        return await callback_query.answer("⛔️ Only admin can use this!", show_alert=True)
+@bot.on_callback_query(filters.regex("checkbackup"))
+async def check_backup_cb(client, callback_query):
+    if callback_query.from_user.id != ADMIN_ID:
+        return await callback_query.answer("⛔️ Only admin allowed", show_alert=True)
 
-    if callback_query.data == "checkbackup":
+    try:
         if os.path.exists("backup_log.txt"):
             with open("backup_log.txt", "r") as log:
                 last_lines = log.readlines()[-5:]
                 await callback_query.message.reply("📦 Last backup logs:\n\n" + "".join(last_lines))
         else:
             await callback_query.message.reply("❌ No backup log found.")
+    except Exception as e:
+        await callback_query.message.reply(f"❌ Error reading log:\n{e}")
 
-    elif callback_query.data == "restoredb":
-        await callback_query.message.reply("♻️ Restore ফিচার খুব শীঘ্রই যুক্ত করা হবে ইনশাআল্লাহ!")
-
-# ✅ Flask Keep-Alive (Render & UptimeRobot support)
+# Flask for Render & UptimeRobot
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
 
 threading.Thread(target=run_flask).start()
 
-# 🔃 Run the bot
 bot.run()

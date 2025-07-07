@@ -3,9 +3,10 @@ from pydrive.drive import GoogleDrive
 import os
 from datetime import datetime
 
-BACKUP_FOLDER_ID = "10M_NNCugieC42CA6FRWvvE9IEtMeRLzD"  # Replace with your folder ID
+# 📁 ফোল্ডারের ID (তোমার ফোল্ডার লিংক থেকে)
+FOLDER_ID = "10M_NNCugieC42CA6FRWvvE9IEtMeRLzD"
 
-def authenticate_drive():
+def authorize_drive():
     gauth = GoogleAuth()
     gauth.LoadCredentialsFile("mycreds.txt")
     if gauth.credentials is None:
@@ -19,46 +20,51 @@ def authenticate_drive():
 
 def backup_database():
     try:
-        drive = authenticate_drive()
+        drive = authorize_drive()
         now = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        backup_file_name = f"database_{now}.db"
-        log_file = "backup_log.txt"
+        db_file = "database.db"
+        backup_name = f"database_{now}.db"
 
-        if not os.path.exists("database.db"):
-            print("❌ database.db not found!")
-            with open(log_file, "a") as log:
-                log.write(f"[{now}] ❌ Backup failed: database.db not found!\n")
-            return
+        if not os.path.exists(db_file):
+            raise Exception("database.db not found!")
 
-        file_to_upload = drive.CreateFile({
-            'title': backup_file_name,
-            'parents': [{'id': BACKUP_FOLDER_ID}]
-        })
-        file_to_upload.SetContentFile("database.db")
-        file_to_upload.Upload()
+        file = drive.CreateFile({'title': backup_name, 'parents': [{'id': FOLDER_ID}]})
+        file.SetContentFile(db_file)
+        file.Upload()
 
-        print("✅ database.db uploaded to Google Drive as", backup_file_name)
-        with open(log_file, "a") as log:
-            log.write(f"[{now}] ✅ Backup done: {backup_file_name}\n")
-
-    except Exception as e:
-        print("❌ Backup failed:", e)
         with open("backup_log.txt", "a") as log:
-            log.write(f"[{now}] ❌ Backup failed: {str(e)}\n")
+            log.write(f"[{now}] ✅ Backup done: {backup_name}\n")
+    except Exception as e:
+        with open("backup_log.txt", "a") as log:
+            log.write(f"[{datetime.now().strftime('%Y-%m-%d_%H-%M')}] ❌ Backup failed: {e}\n")
 
-def restore_database():
+def restore_database(filename="latest"):
     try:
-        drive = authenticate_drive()
-        file_list = drive.ListFile({
-            'q': f"'{BACKUP_FOLDER_ID}' in parents and trashed=false and title contains 'database_'"
-        }).GetList()
+        drive = authorize_drive()
+        file_list = drive.ListFile({'q': f"'{FOLDER_ID}' in parents and trashed=false"}).GetList()
 
         if not file_list:
-            raise Exception("❌ No backup files found in Google Drive folder.")
+            raise Exception("No backup files found.")
 
-        latest_file = sorted(file_list, key=lambda f: f['title'], reverse=True)[0]
-        latest_file.GetContentFile("database.db")
-        print(f"✅ Restored from: {latest_file['title']}")
+        if filename == "latest":
+            # Latest file by name sort
+            file_list.sort(key=lambda x: x['title'], reverse=True)
+            selected_file = file_list[0]
+        else:
+            # Match filename
+            selected_file = next((f for f in file_list if f['title'] == filename), None)
+            if not selected_file:
+                raise Exception(f"File '{filename}' not found in folder.")
 
+        selected_file.GetContentFile("database.db")
+        return f"✅ Restore successful from: {selected_file['title']}"
     except Exception as e:
-        raise e
+        return f"❌ Restore failed: {e}"
+
+def list_backups():
+    try:
+        drive = authorize_drive()
+        file_list = drive.ListFile({'q': f"'{FOLDER_ID}' in parents and trashed=false"}).GetList()
+        return sorted([f['title'] for f in file_list], reverse=True)
+    except Exception as e:
+        return [f"❌ Error: {e}"]
